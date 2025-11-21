@@ -1,0 +1,119 @@
+name: EZ Python Release
+description: Automated semantic versioning and PyPI publishing for Python projects using Poetry
+author: raven-wing
+
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  github_token:
+    description: 'GitHub token for creating releases and pushing changes. Use a GitHub App token or PAT with repo permissions.'
+    required: true
+  python-version:
+    description: 'Python version to use for building the package'
+    required: false
+    default: '3.10'
+  poetry-version:
+    description: 'Poetry version to install. If not specified, uses the latest version.'
+    required: false
+    default: ''
+  git_committer_name:
+    description: 'Name to use for git commits made by semantic-release'
+    required: false
+    default: 'semantic-release'
+  git_committer_email:
+    description: 'Email to use for git commits made by semantic-release'
+    required: false
+    default: 'semantic-release@users.noreply.github.com'
+  build_command:
+    description: 'Command to build the package'
+    required: false
+    default: 'poetry build'
+  root_options:
+    description: 'Additional root options to pass to python-semantic-release'
+    required: false
+    default: ''
+  publish_to_pypi:
+    description: 'Whether to publish to PyPI after building. Requires OIDC token configured.'
+    required: false
+    default: 'false'
+  pypi_packages_dir:
+    description: 'Directory containing distribution packages to publish to PyPI'
+    required: false
+    default: 'dist'
+
+outputs:
+  released:
+    description: 'Whether a release was created (true/false)'
+    value: ${{ steps.release.outputs.released }}
+  tag:
+    description: 'The git tag of the release'
+    value: ${{ steps.release.outputs.tag }}
+  version:
+    description: 'The version that was released'
+    value: ${{ steps.release.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ inputs.github_token }}
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Poetry
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        if [ -n "${{ inputs.poetry-version }}" ]; then
+          pip install poetry==${{ inputs.poetry-version }}
+        else
+          pip install poetry
+        fi
+
+    - name: Install dependencies
+      shell: bash
+      run: poetry install
+
+    - name: Semantic Release
+      id: release
+      uses: python-semantic-release/python-semantic-release@v9.14.0
+      with:
+        github_token: ${{ inputs.github_token }}
+        git_committer_name: ${{ inputs.git_committer_name }}
+        git_committer_email: ${{ inputs.git_committer_email }}
+        build: false
+        root_options: ${{ inputs.root_options }}
+
+    - name: Build package
+      if: steps.release.outputs.released == 'true'
+      shell: bash
+      run: ${{ inputs.build_command }}
+
+    - name: Upload to GitHub Release Assets
+      uses: python-semantic-release/publish-action@v9.14.0
+      if: steps.release.outputs.released == 'true'
+      with:
+        github_token: ${{ inputs.github_token }}
+        tag: ${{ steps.release.outputs.tag }}
+
+    - name: Upload distribution artifacts
+      uses: actions/upload-artifact@v4
+      if: steps.release.outputs.released == 'true'
+      with:
+        name: python-package-distributions
+        path: ${{ inputs.pypi_packages_dir }}
+        if-no-files-found: error
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      if: steps.release.outputs.released == 'true' && inputs.publish_to_pypi == 'true'
+      with:
+        packages-dir: ${{ inputs.pypi_packages_dir }}
