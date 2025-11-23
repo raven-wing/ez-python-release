@@ -34,12 +34,8 @@ inputs:
     description: 'Additional root options to pass to python-semantic-release'
     required: false
     default: ''
-  publish_to_pypi:
-    description: 'Whether to publish to PyPI after building. Requires OIDC token configured.'
-    required: false
-    default: 'false'
-  pypi_packages_dir:
-    description: 'Directory containing distribution packages to publish to PyPI'
+  packages_dir:
+    description: 'Directory containing distribution packages (used for artifacts)'
     required: false
     default: 'dist'
 
@@ -109,11 +105,5 @@ runs:
       if: steps.release.outputs.released == 'true'
       with:
         name: python-package-distributions
-        path: ${{ inputs.pypi_packages_dir }}
+        path: ${{ inputs.packages_dir }}
         if-no-files-found: error
-
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
-      if: steps.release.outputs.released == 'true' && inputs.publish_to_pypi == 'true'
-      with:
-        packages-dir: ${{ inputs.pypi_packages_dir }}
