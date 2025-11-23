@@ -113,7 +113,7 @@ runs:
         if-no-files-found: error
 
     - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
       if: steps.release.outputs.released == 'true' && inputs.publish_to_pypi == 'true'
       with:
         packages-dir: ${{ inputs.pypi_packages_dir }}
