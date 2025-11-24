@@ -12,6 +12,41 @@ Automated semantic versioning and PyPI publishing for Python projects using Poet
 - **Configurable**: Flexible inputs for customizing Python version, Poetry version, build commands, and more
 - **Artifact Upload**: Automatically uploads built distributions as GitHub artifacts
 
+## Prerequisites
+
+### GitHub App Setup
+
+This action requires a GitHub App for authentication. This provides:
+- Elevated permissions to bypass branch protection rules
+- Better security than Personal Access Tokens
+- Proper attribution for automated commits
+
+**To create a GitHub App:**
+
+1. Go to your GitHub Settings → Developer settings → GitHub Apps → New GitHub App
+2. Configure the app:
+   - **Name**: Choose a name (e.g., "My Release Bot")
+   - **Homepage URL**: Your repository URL
+   - **Webhook**: Uncheck "Active"
+   - **Permissions**:
+     - Repository permissions:
+       - Contents: Read and write
+       - Metadata: Read-only
+3. Create the app and note the **App ID**
+4. Generate a private key and download it
+5. Install the app on your repository (Settings → GitHub Apps → Install)
+6. Add secrets to your repository:
+   - `RELEASER_APP_ID`: Your App ID
+   - `RELEASER_PRIVATE_KEY`: Contents of the downloaded private key file
+
+**Branch Protection Bypass:**
+
+To allow the app to push to protected branches:
+1. Go to repository Settings → Branches → Branch protection rules
+2. Edit your main branch rule
+3. Under "Allow specified actors to bypass required pull requests"
+4. Add your GitHub App to the bypass list
+
 ## Usage
 
 ### Basic Example
@@ -26,7 +61,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   test:
@@ -46,18 +80,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: write
     steps:
       - uses: raven-wing/ez-python-release@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_app_id: ${{ secrets.RELEASER_APP_ID }}
+          github_app_private_key: ${{ secrets.RELEASER_PRIVATE_KEY }}
 ```
 
 ### With PyPI Publishing
 
-To publish to PyPI, you need to:
+To publish to PyPI, use a separate job with OIDC trusted publishing. This is more secure than including PyPI publishing in the same job as building.
+
+**Setup Steps:**
 1. Configure [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) on PyPI
-2. Set `publish_to_pypi: 'true'` in the action
-3. Ensure `id-token: write` permission is set
+2. Add a `publish-to-pypi` job that runs after the release job
 
 ```yaml
 name: Release and Publish
@@ -67,39 +105,47 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  id-token: write
-
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+      - name: Run tests
+        run: poetry run pytest
+
   release:
     runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: write
     steps:
       - uses: raven-wing/ez-python-release@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_to_pypi: 'true'
-```
+          github_app_id: ${{ secrets.RELEASER_APP_ID }}
+          github_app_private_key: ${{ secrets.RELEASER_PRIVATE_KEY }}
 
-### With GitHub App Token
-
-For better security and to avoid rate limits, use a GitHub App token:
-
-```yaml
-jobs:
-  release:
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # OIDC for PyPI trusted publishing
     steps:
-      - name: Generate GitHub App token
-        id: generate_token
-        uses: actions/create-github-app-token@v1
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          name: python-package-distributions
+          path: dist
 
-      - uses: raven-wing/ez-python-release@v1
-        with:
-          github_token: ${{ steps.generate_token.outputs.token }}
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
 ```
 
 ### Advanced Configuration
@@ -108,32 +154,34 @@ jobs:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: raven-wing/ez-python-release@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_app_id: ${{ secrets.RELEASER_APP_ID }}
+          github_app_private_key: ${{ secrets.RELEASER_PRIVATE_KEY }}
           python-version: '3.11'
           poetry-version: '1.7.1'
           git_committer_name: 'Release Bot'
           git_committer_email: 'bot@example.com'
           build_command: 'poetry build --format wheel'
-          publish_to_pypi: 'true'
-          pypi_packages_dir: 'dist'
+          packages_dir: 'dist'
 ```
 
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `github_token` | GitHub token for creating releases and pushing changes | Yes | - |
+| `github_app_id` | GitHub App ID for generating authentication token | Yes | - |
+| `github_app_private_key` | GitHub App private key for authentication | Yes | - |
 | `python-version` | Python version to use for building the package | No | `3.10` |
 | `poetry-version` | Poetry version to install (empty = latest) | No | `''` |
 | `git_committer_name` | Name for git commits made by semantic-release | No | `semantic-release` |
 | `git_committer_email` | Email for git commits made by semantic-release | No | `semantic-release@users.noreply.github.com` |
 | `build_command` | Command to build the package | No | `poetry build` |
+| `packages_dir` | Directory containing distribution packages | No | `dist` |
 | `root_options` | Additional root options for python-semantic-release | No | `''` |
-| `publish_to_pypi` | Whether to publish to PyPI (requires OIDC) | No | `false` |
-| `pypi_packages_dir` | Directory containing distribution packages | No | `dist` |
 
 ## Outputs
 
@@ -149,6 +197,8 @@ jobs:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       released: ${{ steps.release.outputs.released }}
       version: ${{ steps.release.outputs.version }}
@@ -156,7 +206,8 @@ jobs:
       - uses: raven-wing/ez-python-release@v1
         id: release
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_app_id: ${{ secrets.RELEASER_APP_ID }}
+          github_app_private_key: ${{ secrets.RELEASER_PRIVATE_KEY }}
 
   notify:
     runs-on: ubuntu-latest
@@ -206,12 +257,18 @@ This adds OAuth2 support for user authentication.
 
 ## Permissions
 
-The action requires specific GitHub permissions:
+The release job requires the following permission:
 
 ```yaml
 permissions:
   contents: write    # For creating releases and pushing version bumps
-  id-token: write    # For PyPI OIDC publishing (if enabled)
+```
+
+If you're publishing to PyPI in a separate job, that job needs:
+
+```yaml
+permissions:
+  id-token: write    # For PyPI OIDC trusted publishing
 ```
 
 ## PyPI Trusted Publishing Setup
@@ -235,13 +292,16 @@ To prevent multiple releases from running simultaneously:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     concurrency:
       group: release-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - uses: raven-wing/ez-python-release@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_app_id: ${{ secrets.RELEASER_APP_ID }}
+          github_app_private_key: ${{ secrets.RELEASER_PRIVATE_KEY }}
 ```
 
 ## Troubleshooting
